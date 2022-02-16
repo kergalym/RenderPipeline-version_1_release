@@ -1,0 +1,118 @@
+#version 430
+
+#pragma include "Includes/Configuration.include"
+
+
+// Unrolling speeds up this pass a lot on nvidia cards
+#pragma optionNV (unroll all)
+
+#if defined(USE_DEBUG_ATTACHMENTS)
+out vec4 color;
+#endif
+
+uniform coherent writeonly image3D dstPosX;
+uniform coherent writeonly image3D dstNegX;
+uniform coherent writeonly image3D dstPosY;
+uniform coherent writeonly image3D dstNegY;
+uniform coherent writeonly image3D dstPosZ;
+uniform coherent writeonly image3D dstNegZ;
+
+uniform sampler3D srcPosX;
+uniform sampler3D srcNegX;
+uniform sampler3D srcPosY;
+uniform sampler3D srcNegY;
+uniform sampler3D srcPosZ;
+uniform sampler3D srcNegZ;
+
+uniform sampler3D voxelSolidTex;
+uniform coherent writeonly image3D voxelSolidWriteTex;
+
+
+struct Voxel {
+    vec3 posX;
+    vec3 negX;
+    vec3 posY;
+    vec3 negY;
+    vec3 posZ;
+    vec3 negZ;
+    bool solid;
+};
+
+Voxel fetchVoxel(vec3 coord) {
+    // textureLod() seems to be the fastest, even faster than texelFetch() and texture()
+    Voxel v;
+
+    v.posX = textureLod(srcPosX, coord, 0).xyz;
+    v.negX = textureLod(srcNegX, coord, 0).xyz;
+    v.posY = textureLod(srcPosY, coord, 0).xyz;
+    v.negY = textureLod(srcNegY, coord, 0).xyz;
+    v.posZ = textureLod(srcPosZ, coord, 0).xyz;
+    v.negZ = textureLod(srcNegZ, coord, 0).xyz;
+    v.solid = textureLod(voxelSolidTex, coord, 0).x > 0.5;
+    return v;
+}
+
+
+void storeVoxel(ivec3 coord, Voxel v) {
+    imageStore(dstPosX, coord, vec4(v.posX.r, v.posX.g, v.posX.b, 0));
+    imageStore(dstNegX, coord, vec4(v.negX.r, v.negX.g, v.negX.b, 0));
+    imageStore(dstPosY, coord, vec4(v.posY.r, v.posY.g, v.posY.b, 0));
+    imageStore(dstNegY, coord, vec4(v.negY.r, v.negY.g, v.negY.b, 0));
+    imageStore(dstPosZ, coord, vec4(v.posZ.r, v.posZ.g, v.posZ.b, 0));
+    imageStore(dstNegZ, coord, vec4(v.negZ.r, v.negZ.g, v.negZ.b, 0));
+}
+
+uniform bool isLastStep;
+uniform bool writeSolidness;
+
+void main() {
+    ivec2 coord = ivec2(gl_FragCoord.xy);
+    ivec3 coord3D = convert_2d_to_3d(coord, GI_GRID_RESOLUTION, GI_SLIDE_COUNT);
+    vec3 floatCoord3D = (coord3D + 0.5) / GI_GRID_RESOLUTION;
+    float voxelSize = 1.0 / GI_GRID_RESOLUTION;
+
+    // Fetch current voxel
+    Voxel v = fetchVoxel(floatCoord3D);
+
+    // Multiply with 4.0/9.0 (=2.25), see below
+    const float distributionFactor = 0.027 * 2.25;
+
+    // Evaluate each direction
+    if (!v.solid || (isLastStep && true)) {
+        Voxel tmp;
+
+        // Using sample offsets of 2.0 / 3.0, we can achieve a 3x3 box kernel
+        // using only 2x2 taps! (We just have to normalize it by multiplying itp
+        // With 4.0/9.0 due to the reduced amount of samples, 4 instead of 9)
+        float sampleOffs = 2.0 / 3.0;
+        
+        float c1, c2;
+        for (int x = 0; x < 2; x++) {
+            for (int y = 0; y < 2; y++) {
+                vec4 dirs = vec4(
+                    sampleOffs * sign(2*x-1),
+                    sampleOffs * sign(2*y-1),
+                    1.0, -1.0) * voxelSize;
+
+                v.posX += textureLod(srcPosX, floatCoord3D + dirs.wxy, 0).xyz * distributionFactor;
+                v.negX += textureLod(srcNegX, floatCoord3D + dirs.zxy, 0).xyz * distributionFactor;
+                v.posY += textureLod(srcPosY, floatCoord3D + dirs.xwy, 0).xyz * distributionFactor;
+                v.negY += textureLod(srcNegY, floatCoord3D + dirs.xzy, 0).xyz * distributionFactor;
+                v.posZ += textureLod(srcPosZ, floatCoord3D + dirs.xyw, 0).xyz * distributionFactor;
+                v.negZ += textureLod(srcNegZ, floatCoord3D + dirs.xyz, 0).xyz * distributionFactor;
+            }
+        }
+    }
+
+    // Store the modified voxel
+    storeVoxel(coord3D, v);
+
+    if (writeSolidness) {
+        imageStore(voxelSolidWriteTex, coord3D, vec4(v.solid ? 1.0 : 0.0));
+    }
+
+    #if defined(USE_DEBUG_ATTACHMENTS)
+        color = vec4(v.posX + v.negX + v.posZ + v.negZ + v.posY + v.negY, 1);
+        // color = vec4(v.solid ? 1.0 : 0.0);
+    #endif
+}

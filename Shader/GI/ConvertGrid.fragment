@@ -1,0 +1,91 @@
+#version 430
+
+#pragma include "Includes/Configuration.include"
+
+uniform isampler3D voxelGenSrcR;
+uniform isampler3D voxelGenSrcG;
+uniform isampler3D voxelGenSrcB;
+
+#if defined(USE_DEBUG_ATTACHMENTS)
+out vec4 color;
+#endif
+
+uniform writeonly image3D voxelDataDestPosX;
+uniform writeonly image3D voxelDataDestNegX;
+uniform writeonly image3D voxelDataDestPosY;
+uniform writeonly image3D voxelDataDestNegY;
+uniform writeonly image3D voxelDataDestPosZ;
+uniform writeonly image3D voxelDataDestNegZ;
+uniform writeonly image3D voxelSolidDest;
+
+struct VoxelDirections {
+    float posX;
+    float negX;
+    float posY;
+    float negY;
+    float posZ;
+    float negZ;
+};
+
+VoxelDirections unpackData(int packedData) {
+    VoxelDirections dir;
+    float scaleF = 0.9;
+    dir.posX = ((packedData >> 0*5) & 0x1F) / 31.0 * scaleF;
+    dir.negX = ((packedData >> 1*5) & 0x1F) / 31.0 * scaleF;
+    dir.posY = ((packedData >> 2*5) & 0x1F) / 31.0 * scaleF;
+    dir.negY = ((packedData >> 3*5) & 0x1F) / 31.0 * scaleF;
+    dir.posZ = ((packedData >> 4*5) & 0x1F) / 31.0 * scaleF;
+    dir.negZ = ((packedData >> 5*5) & 0x1F) / 31.0 * scaleF;
+    return dir;
+}
+
+uniform int skyStartZ;
+
+void main() {
+    ivec2 coord = ivec2(gl_FragCoord.xy);
+    ivec3 coord3D = convert_2d_to_3d(coord, GI_GRID_RESOLUTION, GI_SLIDE_COUNT);
+
+    int valR = texelFetch(voxelGenSrcR, coord3D, 0).x;
+    int valG = texelFetch(voxelGenSrcG, coord3D, 0).x;
+    int valB = texelFetch(voxelGenSrcB, coord3D, 0).x;
+
+    VoxelDirections voxelR = unpackData(valR);
+    VoxelDirections voxelG = unpackData(valG);
+    VoxelDirections voxelB = unpackData(valB);
+
+    float solid = step(1, max(valR, max(valG, valB)));
+
+    if (coord3D.z >= skyStartZ) {
+        vec3 skyColor = vec3(0.6, 0.8, 1.3) * 0.4;
+        skyColor = pow(skyColor, vec3(2.2));
+        voxelR.negZ = skyColor.r;
+        voxelG.negZ = skyColor.g;
+        voxelB.negZ = skyColor.b;
+    } 
+
+    imageStore(voxelDataDestPosX, coord3D, vec4(voxelR.posX, voxelG.posX, voxelB.posX, 0));
+    imageStore(voxelDataDestNegX, coord3D, vec4(voxelR.negX, voxelG.negX, voxelB.negX, 0));
+    imageStore(voxelDataDestPosY, coord3D, vec4(voxelR.posY, voxelG.posY, voxelB.posY, 0));
+    imageStore(voxelDataDestNegY, coord3D, vec4(voxelR.negY, voxelG.negY, voxelB.negY, 0));
+    imageStore(voxelDataDestPosZ, coord3D, vec4(voxelR.posZ, voxelG.posZ, voxelB.posZ, 0));
+    imageStore(voxelDataDestNegZ, coord3D, vec4(voxelR.negZ, voxelG.negZ, voxelB.negZ, 0));
+
+    imageStore(voxelSolidDest, coord3D, vec4(solid));
+
+    // imageStore(voxelDataDest0, coord3D, vec4(voxelR.posX, voxelG.posX, voxelB.posX,  voxelR.negZ));
+    // imageStore(voxelDataDest1, coord3D, vec4(voxelR.negX, voxelG.negX, voxelB.negX,  voxelG.negZ));
+    // imageStore(voxelDataDest2, coord3D, vec4(voxelR.posY, voxelG.posY, voxelB.posY,  voxelB.negZ));
+    // imageStore(voxelDataDest3, coord3D, vec4(voxelR.negY, voxelG.negY, voxelB.negY,  0));
+    // imageStore(voxelDataDest4, coord3D, vec4(voxelR.posZ, voxelG.posZ, voxelB.posZ,  solid));
+
+    #if defined(USE_DEBUG_ATTACHMENTS)
+        color = vec4(
+                voxelR.posX + voxelR.negX + voxelR.posY + voxelR.negY + voxelR.posZ + voxelR.negZ,
+                voxelG.posX + voxelG.negX + voxelG.posY + voxelG.negY + voxelG.posZ + voxelG.negZ,
+                voxelB.posX + voxelB.negX + voxelB.posY + voxelB.negY + voxelB.posZ + voxelB.negZ, 1) * 10.0;
+        color += vec4(1,1, 0, 1) * solid;
+    #endif
+
+
+
+}

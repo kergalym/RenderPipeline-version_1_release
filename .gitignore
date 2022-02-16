@@ -1,0 +1,9 @@
+# Compiled
+.pyd
+.pyc
+*.pyc
+*.ignore
+.idea/
+venv3.7/
+Demoscene.ignore/
+Python39/
